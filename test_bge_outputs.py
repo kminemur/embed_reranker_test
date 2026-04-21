@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import List
 
 import torch
+from optimum.intel import OVModelForFeatureExtraction, OVModelForSequenceClassification
 from transformers import AutoTokenizer
 
 
@@ -50,19 +50,15 @@ def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> 
     return summed / counts
 
 
-def load_embedding_model(model_id: str) -> Tuple[Any, Any]:
-    optimum_intel = importlib.import_module("optimum.intel")
-    ov_model_cls = getattr(optimum_intel, "OVModelForFeatureExtraction")
+def load_embedding_model(model_id: str):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = ov_model_cls.from_pretrained(model_id, device="GPU")
+    model = OVModelForFeatureExtraction.from_pretrained(model_id, device="GPU")
     return tokenizer, model
 
 
-def load_reranker_model(model_id: str) -> Tuple[Any, Any]:
-    optimum_intel = importlib.import_module("optimum.intel")
-    ov_model_cls = getattr(optimum_intel, "OVModelForSequenceClassification")
+def load_reranker_model(model_id: str):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = ov_model_cls.from_pretrained(model_id, device="GPU")
+    model = OVModelForSequenceClassification.from_pretrained(model_id, device="GPU")
     return tokenizer, model
 
 
