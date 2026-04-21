@@ -52,7 +52,7 @@ def load_embedding_model(model_id: str) -> Tuple[Any, Any]:
     optimum_intel = importlib.import_module("optimum.intel")
     ov_model_cls = getattr(optimum_intel, "OVModelForFeatureExtraction")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = ov_model_cls.from_pretrained(model_id)
+    model = ov_model_cls.from_pretrained(model_id, device="GPU")
     return tokenizer, model
 
 
@@ -60,7 +60,7 @@ def load_reranker_model(model_id: str) -> Tuple[Any, Any]:
     optimum_intel = importlib.import_module("optimum.intel")
     ov_model_cls = getattr(optimum_intel, "OVModelForSequenceClassification")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = ov_model_cls.from_pretrained(model_id)
+    model = ov_model_cls.from_pretrained(model_id, device="GPU")
     return tokenizer, model
 
 
