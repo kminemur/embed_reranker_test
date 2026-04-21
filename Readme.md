@@ -1,4 +1,4 @@
-# Minimum Wages 2022 Test (Embedding + Reranker)
+# Test (Embedding + Reranker)
 
 This small test script checks output scores from:
 
