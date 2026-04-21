@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
 import torch
+from huggingface_hub import snapshot_download
 from optimum.intel import OVModelForFeatureExtraction, OVModelForSequenceClassification
 from transformers import AutoTokenizer
 
 
 EMBED_MODEL_ID = "OpenVINO/bge-base-en-v1.5-int8-ov"
 RERANKER_MODEL_ID = "OpenVINO/bge-reranker-base-int8-ov"
+
+MODEL_DIR = Path("models")
+
+
+def ensure_local(repo_id: str) -> Path:
+    local_dir = MODEL_DIR / repo_id.split("/")[-1]
+    if not local_dir.exists():
+        print(f"Downloading {repo_id} -> {local_dir} ...")
+        snapshot_download(repo_id=repo_id, local_dir=str(local_dir))
+    return local_dir
+
 
 NUM_ITERATIONS = 5
 
@@ -51,14 +64,16 @@ def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> 
 
 
 def load_embedding_model(model_id: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = OVModelForFeatureExtraction.from_pretrained(model_id, device="GPU")
+    local_path = ensure_local(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(local_path)
+    model = OVModelForFeatureExtraction.from_pretrained(local_path, device="GPU")
     return tokenizer, model
 
 
 def load_reranker_model(model_id: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = OVModelForSequenceClassification.from_pretrained(model_id, device="GPU")
+    local_path = ensure_local(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(local_path)
+    model = OVModelForSequenceClassification.from_pretrained(local_path, device="GPU")
     return tokenizer, model
 
 
