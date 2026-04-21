@@ -11,6 +11,8 @@ from transformers import AutoTokenizer
 EMBED_MODEL_ID = "OpenVINO/bge-base-en-v1.5-int8-ov"
 RERANKER_MODEL_ID = "OpenVINO/bge-reranker-base-int8-ov"
 
+NUM_ITERATIONS = 5
+
 QUESTION = "What is the minimum wages order for 2022 in Malaysia?"
 
 # Candidate passages sampled from the text you shared.
@@ -106,22 +108,25 @@ def reranker_scores(question: str, passages: List[str]) -> List[float]:
 
 
 def main() -> None:
-    embed = embedding_scores(QUESTION, PASSAGES)
-    rerank = reranker_scores(QUESTION, PASSAGES)
+    for iteration in range(1, NUM_ITERATIONS + 1):
+        print(f"=== Iteration {iteration}/{NUM_ITERATIONS} ===")
 
-    rows = [
-        ScoreRow(passage=p, embed_score=e, reranker_score=r)
-        for p, e, r in zip(PASSAGES, embed, rerank)
-    ]
+        embed = embedding_scores(QUESTION, PASSAGES)
+        rerank = reranker_scores(QUESTION, PASSAGES)
 
-    # Combined sort: prioritize reranker signal, then embedding similarity.
-    rows.sort(key=lambda x: (x.reranker_score, x.embed_score), reverse=True)
+        rows = [
+            ScoreRow(passage=p, embed_score=e, reranker_score=r)
+            for p, e, r in zip(PASSAGES, embed, rerank)
+        ]
 
-    print(f"Question: {QUESTION}\n")
-    for i, row in enumerate(rows, start=1):
-        print(f"[{i}] embed_cos={row.embed_score:.4f}  reranker_sigmoid={row.reranker_score:.4f}")
-        print(row.passage)
-        print()
+        # Combined sort: prioritize reranker signal, then embedding similarity.
+        rows.sort(key=lambda x: (x.reranker_score, x.embed_score), reverse=True)
+
+        print(f"Question: {QUESTION}\n")
+        for i, row in enumerate(rows, start=1):
+            print(f"[{i}] embed_cos={row.embed_score:.4f}  reranker_sigmoid={row.reranker_score:.4f}")
+            print(row.passage)
+            print()
 
 
 if __name__ == "__main__":
