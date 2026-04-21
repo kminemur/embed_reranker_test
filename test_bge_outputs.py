@@ -56,11 +56,8 @@ class ScoreRow:
 
 
 def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-    masked = last_hidden_state * mask
-    summed = masked.sum(dim=1)
-    counts = torch.clamp(mask.sum(dim=1), min=1e-9)
-    return summed / counts
+    mask = attention_mask.unsqueeze(-1).float()
+    return (last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
 
 
 def load_embedding_model(model_id: str):
@@ -84,16 +81,10 @@ def embedding_scores(question: str, passages: List[str]) -> List[float]:
     texts = [f"Represent this sentence for searching relevant passages: {question}"] + passages
     batch = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
 
-    with torch.no_grad():
-        output = model(**batch)
+    output = model(**batch)
 
-    vectors = mean_pool(output.last_hidden_state, batch["attention_mask"])
-    vectors = torch.nn.functional.normalize(vectors, p=2, dim=1)
-
-    q = vectors[0:1]
-    docs = vectors[1:]
-    sims = (q @ docs.T).squeeze(0).tolist()
-    return [float(x) for x in sims]
+    vectors = torch.nn.functional.normalize(mean_pool(output.last_hidden_state, batch["attention_mask"]), p=2, dim=1)
+    return (vectors[0:1] @ vectors[1:].T).squeeze(0).tolist()
 
 
 def reranker_scores(question: str, passages: List[str]) -> List[float]:
@@ -102,8 +93,7 @@ def reranker_scores(question: str, passages: List[str]) -> List[float]:
     queries = [question] * len(passages)
     batch = tokenizer(queries, passages, padding=True, truncation=True, max_length=512, return_tensors="pt")
 
-    with torch.no_grad():
-        logits = model(**batch).logits
+    logits = model(**batch).logits
 
     # Handle both [N,1] and [N,2] heads.
     if logits.ndim == 2 and logits.shape[1] == 2:
@@ -114,8 +104,7 @@ def reranker_scores(question: str, passages: List[str]) -> List[float]:
         raw = logits.squeeze()
 
     # Convert raw logits to 0..1 for easier inspection.
-    probs = torch.sigmoid(raw)
-    return [float(x) for x in probs.tolist()]
+    return torch.sigmoid(raw).tolist()
 
 
 def main() -> None:
