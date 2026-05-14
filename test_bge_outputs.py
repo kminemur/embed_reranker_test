@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
@@ -8,20 +9,43 @@ import torch
 from huggingface_hub import snapshot_download
 from optimum.intel import OVModelForFeatureExtraction, OVModelForSequenceClassification
 from transformers import AutoTokenizer
+from transformers.utils import logging as transformers_logging
 
-
-EMBED_MODEL_ID = "OpenVINO/bge-base-en-v1.5-int8-ov"
-RERANKER_MODEL_ID = "OpenVINO/bge-reranker-base-int8-ov"
 
 MODEL_DIR = Path("models")
+EMBED_MODEL_ID = "OpenVINO/bge-base-en-v1.5-int8-ov"
+RERANKER_MODEL_ID = os.environ.get("RERANKER_MODEL_ID", "BAAI/bge-reranker-v2-m3")
+RERANKER_OPENVINO_DIR = Path(
+    os.environ.get(
+        "RERANKER_OPENVINO_DIR",
+        str(MODEL_DIR / f"{RERANKER_MODEL_ID.split('/')[-1]}-ov"),
+    )
+)
+OPENVINO_DEVICE = os.environ.get("OPENVINO_DEVICE", "GPU")
+
+transformers_logging.set_verbosity_error()
 
 
 def ensure_local(repo_id: str) -> Path:
+    candidate = Path(repo_id)
+    if candidate.exists():
+        return candidate
+
     local_dir = MODEL_DIR / repo_id.split("/")[-1]
     if not local_dir.exists():
         print(f"Downloading {repo_id} -> {local_dir} ...")
         snapshot_download(repo_id=repo_id, local_dir=str(local_dir))
     return local_dir
+
+
+def ensure_converted_reranker(model_id: str) -> Path:
+    if RERANKER_OPENVINO_DIR.exists():
+        return RERANKER_OPENVINO_DIR
+
+    raise FileNotFoundError(
+        f"Converted reranker not found for {model_id}: {RERANKER_OPENVINO_DIR}\n"
+        "Run: python convert_bge_reranker_v2_m3.py"
+    )
 
 
 NUM_ITERATIONS = 5
@@ -63,20 +87,18 @@ def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> 
 def load_embedding_model(model_id: str):
     local_path = ensure_local(model_id)
     tokenizer = AutoTokenizer.from_pretrained(local_path)
-    model = OVModelForFeatureExtraction.from_pretrained(local_path, device="GPU")
+    model = OVModelForFeatureExtraction.from_pretrained(local_path, device=OPENVINO_DEVICE)
     return tokenizer, model
 
 
 def load_reranker_model(model_id: str):
-    local_path = ensure_local(model_id)
+    local_path = ensure_converted_reranker(model_id)
     tokenizer = AutoTokenizer.from_pretrained(local_path)
-    model = OVModelForSequenceClassification.from_pretrained(local_path, device="GPU")
+    model = OVModelForSequenceClassification.from_pretrained(local_path, device=OPENVINO_DEVICE)
     return tokenizer, model
 
 
-def embedding_scores(question: str, passages: List[str]) -> List[float]:
-    tokenizer, model = load_embedding_model(EMBED_MODEL_ID)
-
+def embedding_scores(tokenizer, model, question: str, passages: List[str]) -> List[float]:
     # BGE retrieval format: prepend instruction for the query side.
     texts = [f"Represent this sentence for searching relevant passages: {question}"] + passages
     batch = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
@@ -87,9 +109,7 @@ def embedding_scores(question: str, passages: List[str]) -> List[float]:
     return (vectors[0:1] @ vectors[1:].T).squeeze(0).tolist()
 
 
-def reranker_scores(question: str, passages: List[str]) -> List[float]:
-    tokenizer, model = load_reranker_model(RERANKER_MODEL_ID)
-
+def reranker_scores(tokenizer, model, question: str, passages: List[str]) -> List[float]:
     queries = [question] * len(passages)
     batch = tokenizer(queries, passages, padding=True, truncation=True, max_length=512, return_tensors="pt")
 
@@ -108,11 +128,18 @@ def reranker_scores(question: str, passages: List[str]) -> List[float]:
 
 
 def main() -> None:
+    print(f"Embedding model: {EMBED_MODEL_ID}")
+    print(f"Reranker HF model: {RERANKER_MODEL_ID}")
+    print(f"Reranker OpenVINO dir: {RERANKER_OPENVINO_DIR}")
+    print(f"OpenVINO device: {OPENVINO_DEVICE}")
+    embed_tokenizer, embed_model = load_embedding_model(EMBED_MODEL_ID)
+    reranker_tokenizer, reranker_model = load_reranker_model(RERANKER_MODEL_ID)
+
     for iteration in range(1, NUM_ITERATIONS + 1):
         print(f"=== Iteration {iteration}/{NUM_ITERATIONS} ===")
 
-        embed = embedding_scores(QUESTION, PASSAGES)
-        rerank = reranker_scores(QUESTION, PASSAGES)
+        embed = embedding_scores(embed_tokenizer, embed_model, QUESTION, PASSAGES)
+        rerank = reranker_scores(reranker_tokenizer, reranker_model, QUESTION, PASSAGES)
 
         rows = [
             ScoreRow(passage=p, embed_score=e, reranker_score=r)

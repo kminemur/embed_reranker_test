@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+.vscode/
+venv/
+
+logs/
+models/
+ovms_*/
+ovms_windows_*.zip
