@@ -21,7 +21,14 @@ LOG_DIR = Path("logs")
 MODEL_BASE_DIR = Path("models")
 OVMS_MODEL_ROOT = MODEL_BASE_DIR / "ovms_layout"
 EMBED_MODEL_ID = "OpenVINO/bge-base-en-v1.5-int8-ov"
-RERANKER_MODEL_ID = "OpenVINO/bge-reranker-base-int8-ov"
+RERANKER_MODEL_ID = os.environ.get("RERANKER_MODEL_ID", "BAAI/bge-reranker-v2-m3")
+RERANKER_OPENVINO_DIR = Path(
+    os.environ.get(
+        "RERANKER_OPENVINO_DIR",
+        str(MODEL_BASE_DIR / f"{RERANKER_MODEL_ID.split('/')[-1]}-ov"),
+    )
+)
+OVMS_TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "GPU")
 EMBED_REST_PORT = 9000
 RERANKER_REST_PORT = 9001
 EMBED_GRPC_PORT = 9100
@@ -33,6 +40,10 @@ RERANKER_OVMS_URL = f"http://localhost:{RERANKER_REST_PORT}/v3/rerank"
 
 
 def ensure_model(repo_id: str) -> Path:
+    candidate = Path(repo_id)
+    if candidate.exists():
+        return candidate
+
     local_dir = MODEL_BASE_DIR / repo_id.split("/")[-1]
     if local_dir.exists():
         print(f"Model {local_dir} already exists, skipping download.")
@@ -42,6 +53,29 @@ def ensure_model(repo_id: str) -> Path:
     print(f"  1. test_bge_outputs.py を先に実行する（自動ダウンロード）")
     print(f"  2. HuggingFace から手動でダウンロード: https://huggingface.co/{repo_id}")
     print(f"  配置先: {local_dir.absolute()}\n")
+    raise SystemExit(1)
+
+def ensure_converted_reranker(model_id: str) -> Path:
+    required_files = [
+        "openvino_model.xml",
+        "openvino_model.bin",
+        "openvino_tokenizer.xml",
+        "openvino_tokenizer.bin",
+    ]
+    missing_files = [
+        name for name in required_files
+        if not (RERANKER_OPENVINO_DIR / name).exists()
+    ]
+    if not missing_files:
+        print(f"Converted reranker ready: {RERANKER_OPENVINO_DIR}")
+        return RERANKER_OPENVINO_DIR
+
+    print(f"\n[ERROR] Converted reranker not ready for {model_id}: {RERANKER_OPENVINO_DIR}")
+    print("不足ファイル:")
+    for name in missing_files:
+        print(f"  - {name}")
+    print("先に変換を実行してください:")
+    print("  python convert_bge_reranker_v2_m3.py --force\n")
     raise SystemExit(1)
 
 def ensure_ovms_model_layout(source_dir: Path) -> Path:
@@ -82,7 +116,7 @@ node {{
             normalize_embeddings: true,
             truncate: false,
             pooling: CLS,
-            target_device: "CPU",
+            target_device: "{OVMS_TARGET_DEVICE}",
             plugin_config: '{{"NUM_STREAMS":"1"}}',
         }}
     }}
@@ -101,7 +135,7 @@ node {{
         [type.googleapis.com / mediapipe.RerankCalculatorOVOptions]: {{
             models_path: "./",
             max_allowed_chunks: 10000,
-            target_device: "CPU",
+            target_device: "{OVMS_TARGET_DEVICE}",
             plugin_config: '{{"NUM_STREAMS":"1"}}',
         }}
     }}
@@ -265,9 +299,14 @@ def main():
     download_ovms_zip(OVMS_URL_ZIP, ZIP_NAME)
     extract_zip(ZIP_NAME, EXTRACT_DIR)
 
-    # 2. モデル自動ダウンロード
+    print(f"Embedding model: {EMBED_MODEL_ID}")
+    print(f"Reranker HF model: {RERANKER_MODEL_ID}")
+    print(f"Reranker OpenVINO dir: {RERANKER_OPENVINO_DIR}")
+    print(f"OVMS target device: {OVMS_TARGET_DEVICE}")
+
+    # 2. モデル準備
     embed_model_dir = ensure_ovms_graph(ensure_model(EMBED_MODEL_ID), "embeddings", EMBED_MODEL_NAME)
-    reranker_model_dir = ensure_ovms_graph(ensure_model(RERANKER_MODEL_ID), "rerank", RERANKER_MODEL_NAME)
+    reranker_model_dir = ensure_ovms_graph(ensure_converted_reranker(RERANKER_MODEL_ID), "rerank", RERANKER_MODEL_NAME)
 
     # 3. OVMS起動（embeddingとrerankerを別ポートで起動）
     embed_proc = start_ovms(str(embed_model_dir), EMBED_MODEL_NAME, EMBED_REST_PORT, EMBED_GRPC_PORT)

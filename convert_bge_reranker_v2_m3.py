@@ -4,19 +4,36 @@ import argparse
 import shutil
 from pathlib import Path
 
+import openvino as ov
+from openvino_tokenizers import convert_tokenizer
 from optimum.intel import OVModelForSequenceClassification
 from transformers import AutoTokenizer
+from transformers.utils import logging as transformers_logging
 
 
 MODEL_DIR = Path("models")
 RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
 DEFAULT_OUTPUT_DIR = MODEL_DIR / f"{RERANKER_MODEL_ID.split('/')[-1]}-ov"
+transformers_logging.set_verbosity_error()
+
+
+def save_tokenizer_ir(tokenizer, output_dir: Path) -> None:
+    tokenizer_ir = convert_tokenizer(tokenizer, number_of_inputs=2, max_length=512)
+    ov.save_model(tokenizer_ir, output_dir / "openvino_tokenizer.xml")
 
 
 def convert_model(output_dir: Path, force: bool = False) -> Path:
     model_xml = output_dir / "openvino_model.xml"
-    if model_xml.exists() and not force:
+    tokenizer_xml = output_dir / "openvino_tokenizer.xml"
+    if model_xml.exists() and tokenizer_xml.exists() and not force:
         print(f"OpenVINO model already exists: {output_dir}")
+        return output_dir
+
+    if model_xml.exists() and not tokenizer_xml.exists() and not force:
+        print(f"Adding OpenVINO tokenizer IR: {output_dir}")
+        tokenizer = AutoTokenizer.from_pretrained(output_dir)
+        save_tokenizer_ir(tokenizer, output_dir)
+        print(f"Saved OpenVINO tokenizer: {output_dir}")
         return output_dir
 
     if output_dir.exists() and force:
@@ -34,6 +51,8 @@ def convert_model(output_dir: Path, force: bool = False) -> Path:
 
     tokenizer.save_pretrained(output_dir)
     model.save_pretrained(output_dir)
+    save_tokenizer_ir(tokenizer, output_dir)
+
     print(f"Saved OpenVINO model: {output_dir}")
     return output_dir
 
