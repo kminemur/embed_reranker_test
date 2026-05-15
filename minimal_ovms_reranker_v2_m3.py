@@ -9,7 +9,7 @@ import requests
 
 
 OVMS_EXE = Path("ovms_2026.1.0") / "ovms" / "ovms.exe"
-MODEL_DIR = Path("models") / "bge-reranker-v2-m3-ov"
+MODEL_DIR = Path("models") / "bge-reranker-v2-m3-int8-ov"
 MODEL_NAME = "bge-reranker-v2-m3"
 REST_PORT = 9001
 GRPC_PORT = 9101
