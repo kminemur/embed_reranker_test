@@ -1,20 +1,32 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
+import sys
 from pathlib import Path
 
 import openvino as ov
 from openvino_tokenizers import convert_tokenizer
-from optimum.intel import OVModelForSequenceClassification
+from optimum.intel import OVModelForSequenceClassification, OVWeightQuantizationConfig
 from transformers import AutoTokenizer
 from transformers.utils import logging as transformers_logging
 
 
 MODEL_DIR = Path("models")
 RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
-DEFAULT_OUTPUT_DIR = MODEL_DIR / f"{RERANKER_MODEL_ID.split('/')[-1]}-ov"
+RERANKER_MODEL_NAME = RERANKER_MODEL_ID.split("/")[-1]
+DEFAULT_OUTPUT_DIRS = {
+    "fp32": MODEL_DIR / f"{RERANKER_MODEL_NAME}-ov",
+    "int8": MODEL_DIR / f"{RERANKER_MODEL_NAME}-int8-ov",
+}
 transformers_logging.set_verbosity_error()
+
+
+if os.name == "nt":
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 
 def save_tokenizer_ir(tokenizer, output_dir: Path) -> None:
@@ -22,16 +34,17 @@ def save_tokenizer_ir(tokenizer, output_dir: Path) -> None:
     ov.save_model(tokenizer_ir, output_dir / "openvino_tokenizer.xml")
 
 
-def convert_model(output_dir: Path, force: bool = False) -> Path:
+def convert_model(output_dir: Path, precision: str, force: bool = False) -> Path:
     model_xml = output_dir / "openvino_model.xml"
     tokenizer_xml = output_dir / "openvino_tokenizer.xml"
     if model_xml.exists() and tokenizer_xml.exists() and not force:
-        print(f"OpenVINO model already exists: {output_dir}")
+        print(f"OpenVINO {precision} model already exists: {output_dir}")
         return output_dir
 
     if model_xml.exists() and not tokenizer_xml.exists() and not force:
         print(f"Adding OpenVINO tokenizer IR: {output_dir}")
-        tokenizer = AutoTokenizer.from_pretrained(output_dir)
+        tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL_ID)
+        tokenizer.save_pretrained(output_dir)
         save_tokenizer_ir(tokenizer, output_dir)
         print(f"Saved OpenVINO tokenizer: {output_dir}")
         return output_dir
@@ -40,20 +53,25 @@ def convert_model(output_dir: Path, force: bool = False) -> Path:
         shutil.rmtree(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Converting {RERANKER_MODEL_ID} -> {output_dir} ...")
+    print(f"Converting {RERANKER_MODEL_ID} -> {output_dir} ({precision}) ...")
 
     tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL_ID)
+    quantization_config = None
+    if precision == "int8":
+        quantization_config = OVWeightQuantizationConfig(bits=8)
+
     model = OVModelForSequenceClassification.from_pretrained(
         RERANKER_MODEL_ID,
         export=True,
         compile=False,
+        quantization_config=quantization_config,
     )
 
     tokenizer.save_pretrained(output_dir)
     model.save_pretrained(output_dir)
     save_tokenizer_ir(tokenizer, output_dir)
 
-    print(f"Saved OpenVINO model: {output_dir}")
+    print(f"Saved OpenVINO {precision} model: {output_dir}")
     return output_dir
 
 
@@ -62,10 +80,16 @@ def main() -> None:
         description="Convert BAAI/bge-reranker-v2-m3 to OpenVINO IR for local tests."
     )
     parser.add_argument(
-        "--output-dir",
+        "--precision",
+        choices=["all", "fp32", "int8"],
+        default="all",
+        help="Which precision to convert. Default: all",
+    )
+    parser.add_argument(
+        "--output-root",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory. Default: {DEFAULT_OUTPUT_DIR}",
+        default=MODEL_DIR,
+        help=f"Output root directory. Default: {MODEL_DIR}",
     )
     parser.add_argument(
         "--force",
@@ -74,7 +98,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    convert_model(args.output_dir, force=args.force)
+    precisions = ["fp32", "int8"] if args.precision == "all" else [args.precision]
+    for precision in precisions:
+        output_dir = args.output_root / DEFAULT_OUTPUT_DIRS[precision].name
+        convert_model(output_dir, precision=precision, force=args.force)
 
 
 if __name__ == "__main__":
